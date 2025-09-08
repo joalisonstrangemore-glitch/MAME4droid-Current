@@ -1,9 +1,11 @@
 apply plugin: 'com.android.application'
 
 android {
-    compileSdk 36
+    compileSdk = 36
 
-    ndkVersion = "21.3.6528147"
+    //ndkVersion = "21.3.6528147"
+
+	ndkVersion = "28.2.13676358"
 
 	buildFeatures {
 		buildConfig = true
@@ -18,15 +20,15 @@ android {
         applicationId "com.seleuco.mame4d2024"
         minSdkVersion 29
         targetSdkVersion 36
-        versionCode 95
-        versionName '1.26'
+        versionCode 96
+        versionName '1.27'
 
         ndk {
             moduleName = "mame4droid-jni"
             //noinspection ChromeOsAbiSupport
             abiFilters   "arm64-v8a"
 			//ndkPath "C:\\Android\\android-ndk-r27c"
-			ndkVersion = "27.2.12479018"
+			ndkVersion = "28.2.13676358"
         }
     }
 
