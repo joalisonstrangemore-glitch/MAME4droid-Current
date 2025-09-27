@@ -1,7 +1,7 @@
 /*
  * This file is part of MAME4droid.
  *
- * Copyright (C) 2023 David Valdeita (Seleuco)
+ * Copyright (C) 2025 David Valdeita (Seleuco)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -52,16 +52,17 @@ import android.os.storage.StorageManager;
 import android.os.storage.StorageVolume;
 import android.provider.DocumentsContract;
 import android.util.Log;
-
 import com.seleuco.mame4droid.MAME4droid;
 import com.seleuco.mame4droid.widgets.WarnWidget;
 
 import java.io.File;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.Hashtable;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
+// Inner class to represent a file or directory entry.
 class DirEntry {
 	String name;
 	long size;
@@ -69,404 +70,441 @@ class DirEntry {
 	boolean isDir;
 }
 
+// Inner class to manage the state of an opened directory for iteration.
 class DirEntries {
 	private static int lastId = 1;
-	DirEntries(){this.id = lastId++;}
-	int id = 0;
-	int dirEntIdx = 0;
+	final int id;
+	int dirEntIdx = 0; // Current index for reading entries.
 	ArrayList<DirEntry> dirEntries = null;
+
+	DirEntries() {
+		this.id = lastId++;
+	}
 }
 
+/**
+ * A helper class to abstract interactions with Android's Storage Access Framework (SAF).
+ *
+ * This class provides a file-system-like interface over a URI-based directory tree.
+ * It works by recursively scanning the directory tree (up to a defined depth limit)
+ * and caching the metadata in memory. This allows for faster operations mimicking
+ * traditional file access.
+ *
+ * NOTE: All expensive operations, especially listUriFiles, should be run on a background thread.
+ */
 public class SAFHelper {
 
-	private static final String TAG = "SAF";
+	private static final String TAG = "SAFHelper";
 
-    protected MAME4droid mm = null;
+	private static Uri rootUri = null;
+	private static Map<String, String> fileIDs = null;
+	private static Map<String, ArrayList<DirEntry>> dirFiles = null;
 
-	static Uri uri = null;
-    static protected Hashtable<String, String> fileIDs = null; //hago estatico para evitar reloads si la actividad se recrea
-    static protected Hashtable<String,ArrayList<DirEntry>> dirFiles = null;
+	private final MAME4droid mm;
+	private final Map<Integer, DirEntries> openDirs = new HashMap<>();
+	private WarnWidget pw = null;
 
-	protected Hashtable<Integer, DirEntries> openDirs = new Hashtable<Integer, DirEntries>();
+	public SAFHelper(MAME4droid value) {
+		this.mm = value;
+	}
 
-	protected WarnWidget pw = null;
+	/**
+	 * Sets the root URI for all SAF operations.
+	 *
+	 * @param uriStr The string representation of the tree URI granted by the user.
+	 */
+	public void setURI(String uriStr) {
+		Log.d(TAG, "Setting SAF URI: " + uriStr);
+		if (uriStr == null) {
+			rootUri = null;
+		} else {
+			rootUri = Uri.parse(uriStr);
+		}
+	}
 
-    public void setURI(String uriStr) {
-		Log.d(TAG,"set SAF uri:"+uriStr);
-        if (uriStr == null)
-            uri = null;
-        else
-            uri = Uri.parse(uriStr);
-    }
-
-    public SAFHelper(MAME4droid value) {
-        mm = value;
-    }
-
-	public ArrayList<String> getRomsFileNames(){
-		if (dirFiles == null) {//safety
+	/**
+	 * Retrieves the list of file names in the root ROMs directory.
+	 *
+	 * @return An ArrayList of file names, or null if the cache is not built.
+	 */
+	public ArrayList<String> getRomsFileNames() {
+		if (dirFiles == null) {
+			Log.w(TAG, "getRomsFileNames called before cache was built. Forcing a reload.");
 			listUriFiles(true);
 		}
 
-		ArrayList<String> fileNames = null;
-
-		ArrayList<DirEntry> dirEntries =  dirFiles.get("/");
-		if(dirEntries!=null)
-		{
-			fileNames = new ArrayList<>();
-			for (DirEntry dirEntry :dirEntries) {
+		ArrayList<DirEntry> dirEntries = dirFiles.get("/");
+		if (dirEntries != null) {
+			ArrayList<String> fileNames = new ArrayList<>();
+			for (DirEntry dirEntry : dirEntries) {
 				fileNames.add(dirEntry.name);
 			}
+			return fileNames;
 		}
-
-		return fileNames;
+		return null;
 	}
 
+	/**
+	 * Opens a directory for reading its entries.
+	 *
+	 * @param dirName The path of the directory to read (e.g., "/" or "/subdir/").
+	 * @return A unique integer handle for the opened directory, or 0 on failure.
+	 */
 	public int readDir(String dirName) {
-		int res = 0;
-
-		if (dirFiles == null) {//safety
+		if (dirFiles == null) {
+			Log.w(TAG, "readDir called before cache was built. Forcing a reload.");
 			listUriFiles(true);
 		}
 
-		ArrayList<DirEntry>  folderFiles = dirFiles.get(dirName);
-		if(folderFiles!=null)
-		{
+		ArrayList<DirEntry> folderFiles = dirFiles.get(dirName);
+		if (folderFiles != null) {
 			DirEntries entries = new DirEntries();
 			entries.dirEntries = folderFiles;
-			openDirs.put(entries.id,entries);
-			res = entries.id;
+			openDirs.put(entries.id, entries);
+			return entries.id;
 		}
-		return res;
+		return 0;
 	}
 
+	/**
+	 * Closes a previously opened directory handle.
+	 *
+	 * @param id The handle returned by readDir.
+	 * @return 1 on success, 0 on failure.
+	 */
 	public int closeDir(int id) {
-		int res = 0;
-
-		if(openDirs!=null) {
-			DirEntries dirEntries = openDirs.get(id);
-			if (dirEntries != null) {
-				openDirs.remove(id);
-				res = 1;
-			}
+		if (openDirs != null && openDirs.containsKey(id)) {
+			openDirs.remove(id);
+			return 1;
 		}
-		else res = 1;
-
-		return res;
+		return 0;
 	}
 
-    public String[] getNextDirEntrie(int id) {
-		String [] entryRes = null;
+	/**
+	 * Gets the next entry from an opened directory.
+	 *
+	 * @param id The handle of the opened directory.
+	 * @return A String array containing [name, size, modified_timestamp, type ('D' or 'F')], or null if no more entries.
+	 */
+	public String[] getNextDirEntry(int id) {
+		if (openDirs == null) return null;
 
-		if(openDirs!=null) {
-			DirEntries dirEntries = openDirs.get(id);
-			if (dirEntries != null) {
-				if (dirEntries.dirEntIdx < dirEntries.dirEntries.size()) {
-					DirEntry entry = dirEntries.dirEntries.get(dirEntries.dirEntIdx);
-					dirEntries.dirEntIdx++;
-					entryRes = new String[]{entry.name,String.valueOf(entry.size),String.valueOf(entry.modified),entry.isDir ? "D":"F"};
-				}
+		DirEntries dirEntries = openDirs.get(id);
+		if (dirEntries != null && dirEntries.dirEntIdx < dirEntries.dirEntries.size()) {
+			DirEntry entry = dirEntries.dirEntries.get(dirEntries.dirEntIdx);
+			dirEntries.dirEntIdx++;
+			return new String[]{
+				entry.name,
+				String.valueOf(entry.size),
+				String.valueOf(entry.modified),
+				entry.isDir ? "D" : "F"
+			};
+		}
+		return null;
+	}
+
+	/**
+	 * Opens a file specified by its path and returns a detached file descriptor.
+	 *
+	 * @param pathName The full path of the file (e.g., "/roms/sf2.zip").
+	 * @param flags    The mode to open the file with (e.g., "r", "w", "wt").
+	 * @return A detached file descriptor on success, or -1 on failure.
+	 */
+	public int openUriFd(String pathName, String flags) {
+		Log.d(TAG, "Opening URI for path: " + pathName + " with flags: " + flags);
+
+		if (fileIDs == null) {
+			Log.w(TAG, "openUriFd called before cache was built. Forcing a reload.");
+			if (!listUriFiles(true)) {
+				return -1;
 			}
 		}
-        return entryRes;
-    }
 
-    public int openUriFd(String pathName, String flags) {
-        //System.out.println("openRomUriFd "+pathName+" "+flags);
-
-		Log.d(TAG, "openRomUriFd "+pathName+" "+flags);
-
-        if (fileIDs == null) {//safety
-            //return -1;
-            listUriFiles(true);
-        }
-
-        String fileid = null;
-
-        fileid = (String) fileIDs.get(pathName);
-
-		String path = "";
+		String fileId = fileIDs.get(pathName);
+		String path = "/";
 		String name = pathName;
 		int i = pathName.lastIndexOf("/");
 		if (i != -1) {
-			name = pathName.substring(i + 1, pathName.length());
+			name = pathName.substring(i + 1);
 			path = pathName.substring(0, i + 1);
 		}
 
-        if (fileid == null && flags.contains("w")) {
-            String mimeType = "application/octet-stream";
-            try {
-
-                String docId = retrieveDirId(path,flags);
-
-                if (docId != null && flags.contains("t")) {
-                    Uri dirUri = DocumentsContract.buildDocumentUriUsingTree(uri, docId);
-
-                    Uri docUri = DocumentsContract.createDocument(mm.getContentResolver(), dirUri, mimeType, name);
-                    fileid = DocumentsContract.getDocumentId(docUri);
-                    fileIDs.put(pathName, fileid);
-					DirEntry newFile = new DirEntry();
-					newFile.name = name;
-					newFile.isDir = false;
-					newFile.modified = System.currentTimeMillis();
-					newFile.size = 1;//how to??
-					dirFiles.get(path).add(newFile);
-                }
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }
-
-        if (fileid != null) {
-            final Uri fileUri = DocumentsContract.buildDocumentUriUsingTree(uri, fileid);
-            try {
-				if(flags.contains("w") && !flags.contains("t") ){
-					ArrayList<DirEntry> files = dirFiles.get(path);
-					for (DirEntry e: files) {
-						if(e.name.equals(name)) {
-							e.modified = System.currentTimeMillis();
-							break;
+		if (fileId == null && flags.contains("w")) {
+			String mimeType = "application/octet-stream";
+			try {
+				String parentDocId = retrieveDirId(path, flags);
+				if (parentDocId != null) {
+					Uri dirUri = DocumentsContract.buildDocumentUriUsingTree(rootUri, parentDocId);
+					Uri docUri = DocumentsContract.createDocument(mm.getContentResolver(), dirUri, mimeType, name);
+					if (docUri != null) {
+						fileId = DocumentsContract.getDocumentId(docUri);
+						fileIDs.put(pathName, fileId);
+						DirEntry newFile = new DirEntry();
+						newFile.name = name;
+						newFile.isDir = false;
+						newFile.modified = System.currentTimeMillis();
+						newFile.size = 1;
+						if (dirFiles.get(path) != null) {
+							dirFiles.get(path).add(newFile);
 						}
 					}
 				}
-                return mm.getContentResolver().openFileDescriptor(fileUri, flags).detachFd();
-            } catch (Exception e) {
-                return -1;
-            }
-        }
-        return -1;
-    }
+			} catch (Exception e) {
+				Log.e(TAG, "Failed to create document: " + pathName, e);
+				return -1;
+			}
+		}
 
-    private String retrieveDirId(String path,  String flags) {
+		if (fileId != null) {
+			try {
+				final Uri fileUri = DocumentsContract.buildDocumentUriUsingTree(rootUri, fileId);
+				if (flags.contains("w")) {
+					ArrayList<DirEntry> files = dirFiles.get(path);
+					if (files != null) {
+						for (DirEntry e : files) {
+							if (e.name.equals(name)) {
+								e.modified = System.currentTimeMillis();
+								break;
+							}
+						}
+					}
+				}
+				return mm.getContentResolver().openFileDescriptor(fileUri, flags).detachFd();
+			} catch (Exception e) {
+				Log.e(TAG, "Failed to open file descriptor for: " + pathName, e);
+				return -1;
+			}
+		}
+		//Log.w(TAG, "File ID not found for path: " + pathName);
+		return -1;
+	}
 
-        if (path == null || path.isEmpty())
-            return null;
-
-        String id = (String) fileIDs.get(path);
-        if (id != null || path.equals("/")) {
-            //System.out.println("Encuentro id para "+path+" "+id);
-            return id;
-        } else {
-
-			if(!flags.contains("t"))
-				return null;
-
-            String newPath = path;
-            String dirName = "";
-            int i = path.substring(0, path.length() - 1).lastIndexOf("/");
-            if (i == -1) return null;
-            newPath = path.substring(0, i + 1);
-            dirName = path.substring(i + 1, path.length() - 1);
-
-            //System.out.println("newPath "+newPath);
-            //System.out.println("dirName "+dirName);
-
-            id = retrieveDirId(newPath,flags);
-            if (id != null) {
-                try {
-                    Uri parentDirUri = DocumentsContract.buildDocumentUriUsingTree(uri, id);
-                    Uri newDirUri = DocumentsContract.createDocument(mm.getContentResolver(), parentDirUri, DocumentsContract.Document.MIME_TYPE_DIR, dirName);
-                    id = DocumentsContract.getDocumentId(newDirUri);
-                    fileIDs.put(path, id);
-					ArrayList<DirEntry> newFolderFiles = new ArrayList<DirEntry>();
-					dirFiles.put(path,newFolderFiles);
+	/**
+	 * Recursively retrieves or creates the document ID for a given directory path.
+	 *
+	 * @param path  The directory path (e.g., "/newfolder/").
+	 * @param flags Flags from the open call, used to check if creation is allowed.
+	 * @return The document ID of the directory, or null on failure.
+	 */
+	private String retrieveDirId(String path, String flags) {
+		if (path == null || path.isEmpty()) {
+			return null;
+		}
+		String id = fileIDs.get(path);
+		if (id != null) {
+			return id;
+		}
+		if (!flags.contains("t")) {
+			return null;
+		}
+		String parentPath;
+		String dirName;
+		String trimmedPath = path.substring(0, path.length() - 1);
+		int i = trimmedPath.lastIndexOf('/');
+		if (i == -1) {
+			return null;
+		}
+		parentPath = path.substring(0, i + 1);
+		dirName = trimmedPath.substring(i + 1);
+		String parentId = retrieveDirId(parentPath, flags);
+		if (parentId != null) {
+			try {
+				Uri parentDirUri = DocumentsContract.buildDocumentUriUsingTree(rootUri, parentId);
+				Uri newDirUri = DocumentsContract.createDocument(mm.getContentResolver(), parentDirUri, DocumentsContract.Document.MIME_TYPE_DIR, dirName);
+				if (newDirUri != null) {
+					id = DocumentsContract.getDocumentId(newDirUri);
+					fileIDs.put(path, id);
+					ArrayList<DirEntry> newFolderFiles = new ArrayList<>();
+					dirFiles.put(path, newFolderFiles);
 					DirEntry newDir = new DirEntry();
 					newDir.name = dirName;
 					newDir.isDir = true;
 					newDir.modified = System.currentTimeMillis();
-					newDir.size = 1;//how to??
-					dirFiles.get(newPath).add(newDir);
+					newDir.size = 1;
+					if (dirFiles.get(parentPath) != null) {
+						dirFiles.get(parentPath).add(newDir);
+					}
+					return id;
+				}
+			} catch (Exception e) {
+				Log.e(TAG, "Failed to create subdirectory: " + dirName, e);
+				return null;
+			}
+		}
+		return null;
+	}
 
-                    return id;
-                } catch (Exception e) {
-                    //e.printStackTrace();
-                    return null;
-                }
-            }
-        }
-        return null;
-    }
+	/**
+	 * Scans all files and directories from the root URI and builds the in-memory cache.
+	 * This is a long-running operation and MUST be called from a background thread.
+	 *
+	 * @param reload If true, forces a full rescan even if the cache already exists.
+	 * @return true on success, false on failure.
+	 */
+	public boolean listUriFiles(boolean reload) {
+		if (fileIDs != null && !reload) {
+			return true;
+		}
+		if (rootUri == null) {
+			Log.e(TAG, "SAF URI is not set. Cannot list files.");
+			return false;
+		}
 
-    public boolean listUriFiles(Boolean reload) {
-
-		pw = new WarnWidget(mm,"Caching SAF files."," Reading, please wait...", Color.WHITE,false,false);
+		//Direct call. WarnWidget handles the UI thread internally.
+		pw = new WarnWidget(mm, "Caching SAF files.", "Reading, please wait...", Color.WHITE, false, false);
 		pw.init();
 
-        if (fileIDs != null && !reload) return true;
+		fileIDs = new HashMap<>();
+		dirFiles = new HashMap<>();
+		String id = DocumentsContract.getTreeDocumentId(rootUri);
+		fileIDs.put("/", id);
+		ArrayList<DirEntry> rootEntries = new ArrayList<>();
+		dirFiles.put("/", rootEntries);
 
-        fileIDs = new Hashtable<String, String>();
-		dirFiles = new Hashtable<String,ArrayList<DirEntry>>();
+		boolean success = listUriFilesRecursive(rootEntries, rootUri, "", 0);
 
-        if (uri == null) {
-            Log.e("SAF", "SAF URI NOT SET!!!");
-			throw new RuntimeException("SAF URI NOT SET!!!");
-            //return true;
-        }
+		//Direct call. WarnWidget handles the UI thread internally.
+		if (pw != null) {
+			pw.end();
+		}
 
-        String id = DocumentsContract.getTreeDocumentId(uri);
-        fileIDs.put("/", id);
-		ArrayList<DirEntry> entries = new ArrayList<DirEntry>();
-		dirFiles.put("/",entries);
+		if (!success) {
+			showPermissionsErrorDialog();
+		}
+		return success;
+	}
 
-        System.out.println("path " + pathFromDocumentUri(uri));
-        System.out.println("tree document id " + id);
+	/**
+	 * Recursively scans a directory URI to populate file caches, respecting a depth limit.
+	 *
+	 * @param folderFiles The list of entries for the current directory being scanned.
+	 * @param _uri        The URI of the current directory.
+	 * @param path        The relative string path of the current directory.
+	 * @param depth       The current recursion depth.
+	 * @return true if scanning was successful, false otherwise.
+	 */
+	private boolean listUriFilesRecursive(ArrayList<DirEntry> folderFiles, Uri _uri, String path, int depth) {
+		// This is an intentional depth limit as an optimization.
+		if (depth == 6) {
+			Log.d(TAG, "Reached recursion depth limit at path: " + path);
+			return true;
+		}
 
-        boolean res =  listUriFilesRecursive(entries,   uri, "", 0);
+		final String documentId = (depth == 0)
+			? DocumentsContract.getTreeDocumentId(_uri)
+			: DocumentsContract.getDocumentId(_uri);
 
-		pw.end();
+		final Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(_uri, documentId);
 
-		return res;
-    }
+		//try-with-resources
+		try (Cursor c = mm.getContentResolver().query(childrenUri,
+			new String[]{
+				DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+				DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+				DocumentsContract.Document.COLUMN_MIME_TYPE,
+				DocumentsContract.Document.COLUMN_SIZE,
+				DocumentsContract.Document.COLUMN_LAST_MODIFIED
+			}, null, null, null)) {
 
-    private boolean listUriFilesRecursive(ArrayList<DirEntry> folderFiles, Uri _uri, String path, int p) {
-        if (p == 6) return true;
-
-        //System.out.println("Uri "+_uri);
-        //System.out.println("Tree document id "+DocumentsContract.getTreeDocumentId(_uri));
-        final Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(_uri, p == 0 ? DocumentsContract.getTreeDocumentId(_uri) : DocumentsContract.getDocumentId(_uri));
-        //System.out.println("childrenUri "+childrenUri);
-        Cursor c = null;
-        try {
-            c = mm.getContentResolver().query(childrenUri,
-                    new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-						DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE,
-						DocumentsContract.Document.COLUMN_SIZE,DocumentsContract.Document.COLUMN_LAST_MODIFIED},
-                    null, null, null);
-
-            if (c == null)
-                return false;
-
-            while (c.moveToNext()) {
-                final String documentId = c.getString(c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID));
-				final String displayName = c.getString(c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME));
+			if (c == null) {
+				Log.w(TAG, "Query returned null cursor for: " + childrenUri);
+				return depth > 0;
+			}
+			while (c.moveToNext()) {
+				final String docId = c.getString(c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID));
+				final String name = c.getString(c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME));
 				final long size = c.getLong(c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SIZE));
 				final long modified = c.getLong(c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_LAST_MODIFIED));
-                final String mimeType = c.getString(c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE));
+				final String mimeType = c.getString(c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE));
+				final String filePath = path + "/" + name;
+				//final String filePath = (path + "/" + name).replaceAll("/{2,}", "/");
+				final Uri docUri = DocumentsContract.buildDocumentUriUsingTree(_uri, docId);
+				DirEntry dirEntry = new DirEntry();
+				dirEntry.name = name;
+				dirEntry.modified = modified;
+				dirEntry.size = size;
+				dirEntry.isDir = DocumentsContract.Document.MIME_TYPE_DIR.equals(mimeType);
+				folderFiles.add(dirEntry);
 
-                final boolean isDir = mimeType.equals(DocumentsContract.Document.MIME_TYPE_DIR);
-                final Uri documentUri = DocumentsContract.buildDocumentUriUsingTree(_uri, documentId);
-                final String filepath = path + "/" + displayName;
-                //System.out.println(documentId+ " "+displayName+" "+" "+mimeType+" "+isDir+" "+documentUri);
-                if (!isDir) {
-                    fileIDs.put(filepath, documentId);
-                    //System.out.println(documentId+ " "+filepath+" "+" "+mimeType+" "+documentUri);
-					DirEntry dirEntry = new DirEntry();
-					dirEntry.name = displayName;
-					dirEntry.modified = modified;
-					dirEntry.size = size;
-					dirEntry.isDir = false;
-					folderFiles.add(dirEntry);
-
-					if(pw!=null) {
-						pw.notifyText("Caching: " + displayName);
+				if (dirEntry.isDir) {
+					String dirPath = filePath + "/";
+					ArrayList<DirEntry> newFolderFiles = new ArrayList<>();
+					fileIDs.put(dirPath, docId);
+					dirFiles.put(dirPath, newFolderFiles);
+					listUriFilesRecursive(newFolderFiles, docUri, filePath, depth + 1);
+				} else {
+					fileIDs.put(filePath, docId);
+					// WarnWidget handles the UI thread internally.
+					if (pw != null) {
+						pw.notifyText("Caching: " + name);
 					}
-                } else {
+				}
+			}
+			return true;
+		} catch (Exception e) {
+			Log.e(TAG, "Exception during recursive file listing at path: " + path, e);
+			return depth > 0;
+		}
+	}
 
-					String dirPath = filepath + "/";
-					ArrayList<DirEntry> newFolderFiles = new ArrayList<DirEntry>();
-                    fileIDs.put(dirPath, documentId);
-					DirEntry dirEntry = new DirEntry();
-					dirEntry.name = displayName;
-					dirEntry.modified = modified;
-					dirEntry.size = size;
-					dirEntry.isDir = true;
-					folderFiles.add(dirEntry);
-					dirFiles.put(dirPath,newFolderFiles);
-                    //System.out.println(documentId+ " "+filepath+" "+" "+mimeType+" "+documentUri);
-                    listUriFilesRecursive(newFolderFiles, documentUri, filepath, p + 1);
-                }
-            }
+	/**
+	 * Displays a standardized error dialog when SAF permissions fail.
+	 */
+	private void showPermissionsErrorDialog() {
+		mm.runOnUiThread(() -> {
+			String romsDir = (mm.getPrefsHelper() != null) ? mm.getPrefsHelper().getROMsDIR() : "the selected folder";
+			mm.getDialogHelper().setInfoMsg(
+				"MAME4droid doesn't have permission to read the roms files on " + romsDir +
+					".\n\nPlease grant permissions again or select another ROMs folder, both in MAME4droid menu 'Options -> Settings -> General -> Change ROMs path'.");
+			mm.showDialog(DialogHelper.DIALOG_INFO);
+		});
+	}
 
-            return true;
-        } catch (Exception e) {
-            System.out.println("listUriFiles exception:" + e.toString());
+	private StorageVolume findVolume(String name) {
+		final StorageManager sm = (StorageManager) mm.getSystemService(Context.STORAGE_SERVICE);
+		if ("primary".equalsIgnoreCase(name)) {
+			return sm.getPrimaryStorageVolume();
+		}
+		for (final StorageVolume vol : sm.getStorageVolumes()) {
+			final String uuid = vol.getUuid();
+			if (uuid != null && uuid.equalsIgnoreCase(name)) {
+				return vol;
+			}
+		}
+		return null;
+	}
 
-            if (p == 0) {
-                e.printStackTrace();
-                mm.runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        mm.getDialogHelper().setInfoMsg(
-                                "MAME4droid doesn't have permission to read the roms files on " + mm.getPrefsHelper().getROMsDIR() +
-                                        ".\n\nGive permissions again or select another ROMs folder, both in MAME4droid menu 'Options -> Settings -> General -> Change ROMs path'.");
-                        mm.showDialog(DialogHelper.DIALOG_INFO);
-                    }//public void run() {
-                });
-            }
+	public String pathFromDocumentUri(Uri uri) {
+		final List<String> pathSegments = uri.getPathSegments();
+		if (pathSegments.size() < 2) return null;
 
-            return false;
-        } finally {
-            closeQuietly(c);
-        }
-    }
+		final String[] split = pathSegments.get(1).split(":");
+		if (split.length < 1) return null;
 
-    StorageVolume findVolume(String name) {
-        final StorageManager sm = (StorageManager) mm.getSystemService(Context.STORAGE_SERVICE);
-        if (name.equalsIgnoreCase("primary"))
-            return sm.getPrimaryStorageVolume();
-        for (final StorageVolume vol : sm.getStorageVolumes()) {
-            final String uuid = vol.getUuid();
-            if (uuid != null && uuid.equalsIgnoreCase(name))
-                return vol;
-        }
-        return null;
-    }
+		String tmp = null;
+		if (split.length >= 2) {
+			final StorageVolume vol = findVolume(split[0]);
+			if (vol == null) return null;
 
-    String pathFromDocumentUri(Uri uri) {
-        final List<String> pathSegment = uri.getPathSegments();
-
-        //for(String s : pathSegment) { System.out.println("path segment: " + s); }
-
-        if (pathSegment.size() < 2)
-            return null;
-
-        final String[] split = pathSegment.get(1).split(":");
-
-        String tmp = null;
-
-        if (split.length == 2) {
-
-            final StorageVolume vol = findVolume(split[0]);
-            if (vol == null) {
-                return null;
-            }
-
-            try {
-                File f = vol.getDirectory(); //Cuidado produce NoSuchMethodExcption en Android10 en algunos devices. Edirectory where this volume is mounted, or null if the volume is not currently mounted.
-                if (f != null) {
-                    tmp = f.getAbsolutePath(); //SDK > 29
-                }
-            } catch (Throwable e) {
-                try {
-                    Method method = vol.getClass().getMethod("getPath");//SDK 29
-                    if (method != null) {
-                        tmp = (String) method.invoke(vol);
-                    }
-                } catch (Exception ee) {
-                }
-                //e.printStackTrace();
-                //tmp = "/"+vol.getDescription(mm);
-            }
-            if (tmp != null)
-                tmp += "/" + split[1];
-        } else if (split.length == 1) {
-            if (!split[0].startsWith("/")) {
-                tmp = "/" + split[0];
-            } else
-                tmp = split[0];
-        }
-
-        return tmp;
-    }
-
-    private static void closeQuietly(AutoCloseable closeable) {
-        if (closeable != null) {
-            try {
-                closeable.close();
-            } catch (RuntimeException rethrown) {
-                throw rethrown;
-            } catch (Exception ignored) {
-            }
-        }
-    }
+			if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+				File directory = vol.getDirectory();
+				if (directory != null) {
+					tmp = directory.getAbsolutePath();
+				}
+			} else {
+				try {
+					Method getPathMethod = vol.getClass().getMethod("getPath");
+					tmp = (String) getPathMethod.invoke(vol);
+				} catch (Exception e) {
+					Log.w(TAG, "Failed to get volume path via reflection.", e);
+				}
+			}
+			if (tmp != null) {
+				tmp += "/" + split[1];
+			}
+		} else {
+			tmp = split[0].startsWith("/") ? split[0] : "/" + split[0];
+		}
+		return tmp;
+	}
 }

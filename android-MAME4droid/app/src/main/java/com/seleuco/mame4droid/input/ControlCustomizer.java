@@ -45,209 +45,319 @@
 package com.seleuco.mame4droid.input;
 
 import java.util.ArrayList;
-import java.util.StringTokenizer;
-
 import android.content.res.Configuration;
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.Paint.Style;
+import android.graphics.Typeface;
 import android.view.MotionEvent;
 
 import com.seleuco.mame4droid.Emulator;
 import com.seleuco.mame4droid.MAME4droid;
+import com.seleuco.mame4droid.helpers.DialogHelper;
 import com.seleuco.mame4droid.helpers.PrefsHelper;
 
 public class ControlCustomizer {
 
-    private static boolean enabled = false;
+	private static boolean enabled = false;
 
-    public static void setEnabled(boolean enabled) {
-        ControlCustomizer.enabled = enabled;
-    }
+	// Constant for the movement snap-to-grid threshold
+	private static final int SNAP_TO_GRID = 5;
 
-    public static boolean isEnabled() {
-        return enabled;
-    }
+	// Coordinates of the initial touch position
+	private int initialTouchX = 0;
+	private int initialTouchY = 0;
 
-    private InputValue valueMoved = null;
-    private int ax = 0;
-    private int ay = 0;
-    private int old_ax = 0;
-    private int old_ay = 0;
-    private int prev_ax = 0;
-    private int prev_ay = 0;
+	// Initial offset of the control when it starts to be dragged
+	private int initialXOffset = 0;
+	private int initialYOffset = 0;
 
-    protected MAME4droid mm = null;
+	private InputValue valueMoved = null;
 
-    public void setMAME4droid(MAME4droid value) {
-        mm = value;
-    }
+	protected MAME4droid mm = null;
 
-    public void discardDefinedControlLayout() {
+	// New Rect for the save button
+	private Rect saveButtonRect;
+	// Button dimensions
+	private static final int BUTTON_WIDTH = 200;
+	private static final int BUTTON_HEIGHT = 80;
+	// Padding for the text within the button
+	private static final int TEXT_PADDING = 10;
 
-        ArrayList<InputValue> values = mm.getInputHandler().getTouchController().getAllInputData();
-        for (int j = 0; j < values.size(); j++) {
-            InputValue iv = values.get(j);
-            iv.setOffsetTMP(0, 0);
-            if (iv.getType() == TouchController.TYPE_ANALOG_RECT)
-                mm.getInputHandler().getTouchStick().setStickArea(iv.getRect());
-        }
-        mm.getInputView().updateImages();
-    }
+	/**
+	 * Activates or deactivates the control customization mode.
+	 * @param enabled The state of the mode.
+	 */
+	public static void setEnabled(boolean enabled) {
+		ControlCustomizer.enabled = enabled;
+	}
 
-    public void saveDefinedControlLayout() {
+	/**
+	 * Returns whether the customization mode is active.
+	 * @return true if active, false otherwise.
+	 */
+	public static boolean isEnabled() {
+		return enabled;
+	}
 
-        StringBuffer definedStr = new StringBuffer();
+	/**
+	 * Assigns the main MAME4droid instance.
+	 * @param value The MAME4droid instance.
+	 */
+	public void setMAME4droid(MAME4droid value) {
+		mm = value;
+	}
 
-        ArrayList<InputValue> values = mm.getInputHandler().getTouchController().getAllInputData();
-        boolean first = true;
-        for (int j = 0; j < values.size(); j++) {
-            InputValue iv = values.get(j);
-            iv.commitChanges();
-            if (iv.getXoff() == 0 && iv.getYoff() == 0)
-                continue;
-            if (!first)
-                definedStr.append(",");
-            definedStr.append(iv.getType() + "," + iv.getValue() + "," + iv.getXoff() + "," + iv.getYoff());
-            first = false;
-        }
-        if (mm.getMainHelper().getscrOrientation() == Configuration.ORIENTATION_LANDSCAPE)
-            mm.getPrefsHelper().setDefinedControlLayoutLand(definedStr.toString());
-        else
-            mm.getPrefsHelper().setDefinedControlLayoutPortrait(definedStr.toString());
+	/**
+	 * Discards the position changes of the control layout.
+	 * Resets temporary offsets to zero.
+	 */
+	public void discardDefinedControlLayout() {
+		ArrayList<InputValue> values = mm.getInputHandler().getTouchController().getAllInputData();
+		for (InputValue iv : values) {
+			iv.setOffsetTMP(0, 0);
+			if (iv.getType() == TouchController.TYPE_ANALOG_RECT) {
+				mm.getInputHandler().getTouchStick().setStickArea(iv.getRect());
+			}
+		}
+		mm.getInputView().updateImages();
+	}
 
-    }
+	/**
+	 * Saves the current position of the controls to preferences.
+	 */
+	public void saveDefinedControlLayout() {
+		StringBuilder definedStr = new StringBuilder();
+		ArrayList<InputValue> values = mm.getInputHandler().getTouchController().getAllInputData();
+		boolean first = true;
+		for (InputValue iv : values) {
+			// Commit temporary offset changes to permanent offsets
+			iv.commitChanges();
+			if (iv.getXoff() != 0 || iv.getYoff() != 0) {
+				if (!first) {
+					definedStr.append(",");
+				}
+				definedStr.append(iv.getType()).append(",").append(iv.getValue()).append(",").append(iv.getXoff()).append(",").append(iv.getYoff());
+				first = false;
+			}
+		}
+		if (mm.getMainHelper().getscrOrientation() == Configuration.ORIENTATION_LANDSCAPE) {
+			mm.getPrefsHelper().setDefinedControlLayoutLand(definedStr.toString());
+		} else {
+			mm.getPrefsHelper().setDefinedControlLayoutPortrait(definedStr.toString());
+		}
+	}
 
-    public void readDefinedControlLayout() {
+	/**
+	 * Reads and applies the saved control position configuration.
+	 */
+	public void readDefinedControlLayout() {
+		// Do not apply if in non-full portrait mode
+		if (mm.getMainHelper().getscrOrientation() == Configuration.ORIENTATION_PORTRAIT && !Emulator.isPortraitFull()) {
+			return;
+		}
 
-        if (mm.getMainHelper().getscrOrientation() == Configuration.ORIENTATION_PORTRAIT && !Emulator.isPortraitFull())
-            return;
+		ArrayList<InputValue> values = mm.getInputHandler().getTouchController().getAllInputData();
+		String definedStr = (mm.getMainHelper().getscrOrientation() == Configuration.ORIENTATION_LANDSCAPE)
+			? mm.getPrefsHelper().getDefinedControlLayoutLand()
+			: mm.getPrefsHelper().getDefinedControlLayoutPortrait();
 
-        ArrayList<InputValue> values = mm.getInputHandler().getTouchController().getAllInputData();
+		if (definedStr != null && !definedStr.isEmpty()) {
+			String[] tokens = definedStr.split(",");
+			if (tokens.length % 4 != 0) {
+				// Handle error in string format
+				return;
+			}
 
-        String definedStr = mm.getMainHelper().getscrOrientation() == Configuration.ORIENTATION_LANDSCAPE ?
-                mm.getPrefsHelper().getDefinedControlLayoutLand() :
-                mm.getPrefsHelper().getDefinedControlLayoutPortrait();
+			for (int i = 0; i < tokens.length; i += 4) {
+				try {
+					int type = Integer.parseInt(tokens[i]);
+					int value = Integer.parseInt(tokens[i + 1]);
+					int xoff = Integer.parseInt(tokens[i + 2]);
+					int yoff = Integer.parseInt(tokens[i + 3]);
 
-        if (definedStr != null) {
+					for (InputValue iv : values) {
+						if (iv.getType() == type && iv.getValue() == value) {
+							iv.setOffset(xoff, yoff);
+							if (type == TouchController.TYPE_ANALOG_RECT) {
+								mm.getInputHandler().getTouchStick().setStickArea(iv.getRect());
+							}
+							break;
+						}
+					}
+				} catch (NumberFormatException e) {
+					// Log the error for debugging if the format is incorrect
+					e.printStackTrace();
+				}
+			}
+		}
+		mm.getInputView().updateImages();
+	}
 
-            StringTokenizer tok = new StringTokenizer(definedStr, ",", false);
+	/**
+	 * Updates the position of related rectangles for the moved control.
+	 */
+	protected void updateRelatedRects() {
+		if (valueMoved == null) return;
 
-            while (tok.hasMoreTokens()) {
-                int type = Integer.parseInt(tok.nextToken());
-                int value = Integer.parseInt(tok.nextToken());
-                int xoff = Integer.parseInt(tok.nextToken());
-                int yoff = Integer.parseInt(tok.nextToken());
-                for (int j = 0; j < values.size(); j++) {
-                    InputValue iv = values.get(j);
-                    if (iv.getType() == type && iv.getValue() == value) {
-                        iv.setOffset(xoff, yoff);
-                        if (type == TouchController.TYPE_ANALOG_RECT)
-                            mm.getInputHandler().getTouchStick().setStickArea(iv.getRect());
-                    }
-                }
-            }
-        }
+		ArrayList<InputValue> values = mm.getInputHandler().getTouchController().getAllInputData();
 
-        mm.getInputView().updateImages();
+		// Control type that has an associated image
+		if (valueMoved.getType() == TouchController.TYPE_BUTTON_RECT) {
+			for (InputValue iv : values) {
+				if (iv.getType() == TouchController.TYPE_BUTTON_IMG && iv.getValue() == valueMoved.getValue()) {
+					iv.setOffsetTMP(valueMoved.getXoff_tmp(), valueMoved.getYoff_tmp());
+					break;
+				}
+			}
+		} else if (valueMoved.getType() == TouchController.TYPE_STICK_IMG || valueMoved.getType() == TouchController.TYPE_ANALOG_RECT) {
+			// Control types that have an associated stick
+			for (InputValue iv : values) {
+				if (iv.getType() == TouchController.TYPE_STICK_RECT || iv.getType() == TouchController.TYPE_STICK_IMG || iv.getType() == TouchController.TYPE_ANALOG_RECT) {
+					iv.setOffsetTMP(valueMoved.getXoff_tmp(), valueMoved.getYoff_tmp());
+				}
+				if (iv.getType() == TouchController.TYPE_ANALOG_RECT) {
+					mm.getInputHandler().getTouchStick().setStickArea(valueMoved.getRect());
+				}
+			}
+		}
+	}
 
-    }
+	/**
+	 * Handles screen motion events to drag controls.
+	 * @param event The motion event.
+	 */
+	public void handleMotion(MotionEvent event) {
+		int action = event.getActionMasked();
+		int x = (int) event.getX();
+		int y = (int) event.getY();
 
-    protected void updateRelatedRects() {
+		switch (action) {
+			case MotionEvent.ACTION_DOWN:
+				// Check if the save button was touched
+				if (saveButtonRect != null && saveButtonRect.contains(x, y)) {
+					// Logic to save the layout
+					mm.showDialog(DialogHelper.DIALOG_FINISH_CUSTOM_LAYOUT);
 
-        ArrayList<InputValue> values = mm.getInputHandler().getTouchController().getAllInputData();
-        if (valueMoved.getType() == TouchController.TYPE_BUTTON_RECT) {
-            for (int j = 0; j < values.size(); j++) {
-                InputValue iv = values.get(j);
-                if (iv.getType() == TouchController.TYPE_BUTTON_IMG && iv.getValue() == valueMoved.getValue()) {
-                    iv.setOffsetTMP(valueMoved.getXoff_tmp(), valueMoved.getYoff_tmp());
-                    break;
-                }
-            }
-        } else if (valueMoved.getType() == TouchController.TYPE_STICK_IMG || valueMoved.getType() == TouchController.TYPE_ANALOG_RECT) {
-            for (int j = 0; j < values.size(); j++) {
-                InputValue iv = values.get(j);
+					mm.getInputView().invalidate();
+					return;
+				}
 
-                if (iv.getType() == TouchController.TYPE_STICK_RECT || iv.getType() == TouchController.TYPE_STICK_IMG || iv.getType() == TouchController.TYPE_ANALOG_RECT)
-                    iv.setOffsetTMP(valueMoved.getXoff_tmp(), valueMoved.getYoff_tmp());
+				// If not, look for a control to move
+				ArrayList<InputValue> values = mm.getInputHandler().getTouchController().getAllInputData();
+				for (InputValue iv : values) {
+					// Check the type of control that can be moved
+					if ((iv.getType() == TouchController.TYPE_BUTTON_RECT || iv.getType() == TouchController.TYPE_STICK_IMG || iv.getType() == TouchController.TYPE_ANALOG_RECT)
+						&& iv.getRect().contains(x, y)) {
+						valueMoved = iv;
+						initialTouchX = x;
+						initialTouchY = y;
+						initialXOffset = iv.getXoff_tmp();
+						initialYOffset = iv.getYoff_tmp();
+						break;
+					}
+				}
+				break;
 
-                if (iv.getType() == TouchController.TYPE_ANALOG_RECT) {
-                    mm.getInputHandler().getTouchStick().setStickArea(valueMoved.getRect());
-                }
-            }
-        }
-    }
+			case MotionEvent.ACTION_MOVE:
+				if (valueMoved != null) {
+					int deltaX = x - initialTouchX;
+					int deltaY = y - initialTouchY;
 
-    public void handleMotion(MotionEvent event) {
-        int action = event.getAction();
+					// Snap-to-grid adjustment
+					int newXOffset = initialXOffset + (deltaX / SNAP_TO_GRID) * SNAP_TO_GRID;
+					int newYOffset = initialYOffset + (deltaY / SNAP_TO_GRID) * SNAP_TO_GRID;
 
-        int x = (int) event.getX();
-        int y = (int) event.getY();
+					valueMoved.setOffsetTMP(newXOffset, newYOffset);
+					updateRelatedRects();
 
-        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-            valueMoved = null;
-            mm.getInputView().invalidate();
-            ax = 0;
-            ay = 0;
-        } else {
-            if (valueMoved != null) {
-                int new_ax = ((Math.abs((x - ax) - prev_ax) > 5 ? (x - ax) : 0) / 5) * 5;
-                int new_ay = ((Math.abs((y - ay) - prev_ay) > 5 ? (y - ay) : 0) / 5) * 5;
-                if (new_ax != 0 || new_ay != 0) {
-                    prev_ax = new_ax != 0 ? new_ax : prev_ax;
-                    prev_ay = new_ay != 0 ? new_ay : prev_ay;
-                    valueMoved.setOffsetTMP(prev_ax + old_ax, prev_ay + old_ay);
-                    this.updateRelatedRects();
-                    mm.getInputView().updateImages();
-                    mm.getInputView().invalidate();
-                }
-                //mm.getInputView().invalidate(valueMoved.getRect());
-            } else {
-                ArrayList<InputValue> values = mm.getInputHandler().getTouchController().getAllInputData();
+					// Only invalidate if coordinates have changed
+					if (deltaX != 0 || deltaY != 0) {
+						mm.getInputView().updateImages();
+						mm.getInputView().invalidate();
+					}
+				}
+				break;
 
-                for (int j = 0; j < values.size(); j++) {
-                    InputValue iv = values.get(j);
+			case MotionEvent.ACTION_UP:
+			case MotionEvent.ACTION_CANCEL:
+				valueMoved = null;
+				mm.getInputView().invalidate();
+				break;
+		}
+	}
 
-                    if (iv.getRect().contains(x, y)) {
+	/**
+	 * Draws the control rectangles for customization mode and the save button.
+	 * @param canvas The canvas to draw on.
+	 */
+	public void draw(Canvas canvas) {
+		if (canvas == null) return;
 
-                        if (iv.getType() == TouchController.TYPE_BUTTON_RECT || iv.getType() == TouchController.TYPE_STICK_IMG
-                                || iv.getType() == TouchController.TYPE_ANALOG_RECT) {
-                            //iv.setOffsetTMP(0,0);
-                            //ax = iv.getRect().centerX();
-                            //ay = iv.getRect().centerY();
-                            old_ax = iv.getXoff_tmp();
-                            old_ay = iv.getYoff_tmp();
-                            ax = x;
-                            ay = y;
-                            prev_ax = 0;
-                            prev_ay = 0;
-                            valueMoved = iv;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
+		// Draw the save button
+		Paint pButton = new Paint();
+		// Bright yellow color
+		pButton.setColor(Color.YELLOW);
+		pButton.setStyle(Style.FILL);
+		pButton.setAlpha(200);
 
-    public void draw(Canvas canvas) {
-        ArrayList<InputValue> ids = mm.getInputHandler().getTouchController().getAllInputData();
-        Paint p2 = new Paint();
-        p2.setARGB(30, 255, 255, 255);
-        //p2.setColor(Color.CYAN);
-        p2.setStyle(Style.FILL);
-        for (int i = 0; i < ids.size(); i++) {
-            InputValue v = ids.get(i);
-            Rect r = v.getRect();
-            if (r != null) {
-                if (v.getType() == TouchController.TYPE_BUTTON_RECT)
-                    canvas.drawRect(r, p2);
-                else if (mm.getPrefsHelper().getControllerType() == PrefsHelper.PREF_DIGITAL_DPAD && v.getType() == TouchController.TYPE_STICK_RECT)
-                    canvas.drawRect(r, p2);
-                else if (mm.getPrefsHelper().getControllerType() != PrefsHelper.PREF_DIGITAL_DPAD && v.getType() == TouchController.TYPE_ANALOG_RECT)
-                    canvas.drawRect(r, p2);
-            }
-        }
-    }
+		int centerX = canvas.getWidth() / 2;
+		//int topY = 20; // Fixed position at the top
+		int centerY = canvas.getHeight() / 2;
+
+		//saveButtonRect = new Rect(centerX - BUTTON_WIDTH / 2, topY, centerX + BUTTON_WIDTH / 2, topY + BUTTON_HEIGHT);
+		saveButtonRect = new Rect(centerX - BUTTON_WIDTH / 2, centerY - BUTTON_HEIGHT / 2, centerX + BUTTON_WIDTH / 2, centerY + BUTTON_HEIGHT / 2);
+		canvas.drawRect(saveButtonRect, pButton);
+
+		// Draw the button text
+		Paint pText = new Paint();
+		pText.setColor(Color.BLACK); // Black text for contrast with yellow
+		pText.setTextSize(30);
+		pText.setTypeface(Typeface.DEFAULT_BOLD);
+		pText.setTextAlign(Paint.Align.CENTER);
+
+		// Calculate and adjust text size to fit with padding
+		String text = "SAVE LAYOUT";
+		float textWidth = pText.measureText(text);
+
+		// Check if the text fits with the desired padding
+		if (textWidth + (2 * TEXT_PADDING) > saveButtonRect.width()) {
+			// Text is too large, adjust the size
+			float scale = (float) (saveButtonRect.width() - (2 * TEXT_PADDING)) / textWidth;
+			pText.setTextSize(pText.getTextSize() * scale);
+		}
+
+		// Draw the text centered in the button
+		Rect textBounds = new Rect();
+		pText.getTextBounds(text, 0, text.length(), textBounds);
+		float textY = saveButtonRect.centerY() - ((pText.descent() + pText.ascent()) / 2);
+
+		canvas.drawText(text, saveButtonRect.centerX(), textY, pText);
+
+		// Draw the existing control rectangles
+		ArrayList<InputValue> ids = mm.getInputHandler().getTouchController().getAllInputData();
+		Paint p2 = new Paint();
+		p2.setARGB(30, 255, 255, 255);
+		p2.setStyle(Style.FILL);
+
+		for (InputValue v : ids) {
+			Rect r = v.getRect();
+			if (r != null) {
+				boolean draw = false;
+				if (v.getType() == TouchController.TYPE_BUTTON_RECT) {
+					draw = true;
+				} else if (mm.getPrefsHelper().getControllerType() == PrefsHelper.PREF_DIGITAL_DPAD && v.getType() == TouchController.TYPE_STICK_RECT) {
+					draw = true;
+				} else if (mm.getPrefsHelper().getControllerType() != PrefsHelper.PREF_DIGITAL_DPAD && v.getType() == TouchController.TYPE_ANALOG_RECT) {
+					draw = true;
+				}
+
+				if (draw) {
+					canvas.drawRect(r, p2);
+				}
+			}
+		}
+	}
 }

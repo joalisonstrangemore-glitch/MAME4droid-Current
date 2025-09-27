@@ -1,7 +1,7 @@
 /*
  * This file is part of MAME4droid.
  *
- * Copyright (C) 2024 David Valdeita (Seleuco)
+ * Copyright (C) 2025 David Valdeita (Seleuco)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -54,7 +54,6 @@ import com.seleuco.mame4droid.widgets.WarnWidget;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.util.Arrays;
 
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
@@ -67,9 +66,6 @@ public class GLRendererES10 implements Renderer, IGLRenderer {
 
 	private final int[] mCrop;
 
-	protected int ax = 0;
-	protected int ay = 0;
-
 	protected ByteBuffer byteBuffer = null;
 	protected boolean emuTextureInit = false;
 	protected boolean isAltPath = false;
@@ -80,10 +76,13 @@ public class GLRendererES10 implements Renderer, IGLRenderer {
 
 	protected boolean warn = false;
 
+	/**
+	 * Sets the MAME4droid instance for the renderer.
+	 * @param mm The MAME4droid application instance.
+	 */
 	public void setMAME4droid(MAME4droid mm) {
 		this.mm = mm;
 		if (mm == null) return;
-
 		isAltPath = mm.getPrefsHelper().isAltGLPath();
 	}
 
@@ -91,42 +90,38 @@ public class GLRendererES10 implements Renderer, IGLRenderer {
 		mCrop = new int[4];
 	}
 
+	/**
+	 * Notifies the renderer that the emulated screen size has changed.
+	 * This forces the texture to be re-initialized in the next frame.
+	 */
 	public void changedEmulatedSize() {
-		//Log.v("mm","changedEmulatedSize "+shortBuffer+" "+Emulator.getScreenBuffer());
 		if (Emulator.getScreenBuffer() == null) return;
 		byteBuffer = Emulator.getScreenBuffer();
 		emuTextureInit = false;
 	}
 
+	/**
+	 * Calculates the next power-of-two size for a given dimension.
+	 * This is required for older OpenGL ES 1.0 implementations.
+	 * @param gl The GL10 instance.
+	 * @param size The original dimension.
+	 * @return The smallest power-of-two size greater than or equal to the original size.
+	 */
 	private int getP2Size(GL10 gl, int size) {
-		//String exts = gl.glGetString(GL10.GL_EXTENSIONS);
-		//if(exts.indexOf("GL_ARB_texture_non_power_of_two")!=-1 )
-		//return size;
-		if (size <= 64)
-			return 64;
-		else if (size <= 128)
-			return 128;
-		else if (size <= 256)
-			return 256;
-		else if (size <= 512)
-			return 512;
-		else if (size <= 1024)
-			return 1024;
-		else if (size <= 2048)
-			return 2048;
-		else if (size <= 4096)
-			return 4096;
-		else
-			return 8192;
+		int p2Size = 1;
+		while (p2Size < size) {
+			p2Size <<= 1;
+		}
+		return p2Size;
 	}
 
+	@Override
 	public void onSurfaceCreated(GL10 gl, EGLConfig config) {
-
 		Log.v("mm", "onSurfaceCreated ");
 
+		// Basic OpenGL ES 1.0 configuration
 		gl.glHint(GL10.GL_PERSPECTIVE_CORRECTION_HINT, GL10.GL_FASTEST);
-
-		gl.glClearColor(0.5f, 0.5f, 0.5f, 1);
+		gl.glClearColor(0.0f, 0.0f, 0.0f, 1.0f); // Changed to black for a cleaner look
 		gl.glClear(GL10.GL_COLOR_BUFFER_BIT | GL10.GL_DEPTH_BUFFER_BIT);
 
 		gl.glShadeModel(GL10.GL_FLAT);
@@ -137,11 +132,13 @@ public class GLRendererES10 implements Renderer, IGLRenderer {
 		gl.glDisable(GL10.GL_BLEND);
 		gl.glDisable(GL10.GL_CULL_FACE);
 		gl.glDisable(GL10.GL_DEPTH_TEST);
-		gl.glDisable(GL10.GL_MULTISAMPLE);
+		// Note: GL_MULTISAMPLE is an extension and might not be available
+		// gl.glDisable(GL10.GL_MULTISAMPLE);
 
 		emuTextureInit = false;
 	}
 
+	@Override
 	public void onSurfaceChanged(GL10 gl, int w, int h) {
 		Log.v("mm", "sizeChanged: ==> new Viewport: [" + w + "," + h + "]");
 
@@ -150,10 +147,12 @@ public class GLRendererES10 implements Renderer, IGLRenderer {
 		gl.glMatrixMode(GL10.GL_PROJECTION);
 		gl.glLoadIdentity();
 		gl.glOrthof(0f, w, h, 0f, -1f, 1f);
+		gl.glMatrixMode(GL10.GL_MODELVIEW);
+		gl.glLoadIdentity();
 
 		gl.glFrontFace(GL10.GL_CCW);
 
-		gl.glClearColor(0.5f, 0.5f, 0.5f, 1);
+		gl.glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 		gl.glClear(GL10.GL_COLOR_BUFFER_BIT | GL10.GL_DEPTH_BUFFER_BIT);
 
 		emuTextureInit = false;
@@ -163,85 +162,71 @@ public class GLRendererES10 implements Renderer, IGLRenderer {
 		return Emulator.isEmuFiltering();
 	}
 
+	/**
+	 * Releases the OpenGL texture resource.
+	 * @param gl The GL10 instance.
+	 */
 	private void releaseTexture(GL10 gl) {
 		if (emuTextureId != -1) {
 			gl.glDeleteTextures(1, new int[]{emuTextureId}, 0);
+			emuTextureId = -1; // Resetting ID to prevent double frees
 		}
 	}
+
 
 	public void dispose(GL10 gl) {
 		releaseTexture(gl);
 	}
 
+	/**
+	 * Creates or updates the emulator texture.
+	 * It handles texture creation only when necessary (first time or filter change).
+	 * @param gl The GL10 instance.
+	 */
 	protected void createEmuTexture(final GL10 gl) {
+		if (gl == null) return;
 
-		if (gl != null) {
+		// Recreate texture if it doesn't exist or if filter setting has changed
+		if (emuTextureId == -1 || smooth != isSmooth()) {
+			releaseTexture(gl); // Ensure old texture is deleted before creating a new one
 
-			if (emuTextureId == -1 || smooth != isSmooth()) {
-				int[] mTextureNameWorkspace = new int[1];
-				int textureId = -1;
+			int[] mTextureNameWorkspace = new int[1];
+			gl.glGenTextures(1, mTextureNameWorkspace, 0);
+			emuTextureId = mTextureNameWorkspace[0];
 
-				if (emuTextureId != -1) {
-					gl.glDeleteTextures(1, new int[]{emuTextureId}, 0);
-				}
+			gl.glBindTexture(GL10.GL_TEXTURE_2D, emuTextureId);
 
-				gl.glGenTextures(1, mTextureNameWorkspace, 0);
+			smooth = isSmooth();
+			gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_MIN_FILTER, smooth ? GL10.GL_LINEAR : GL10.GL_NEAREST);
+			gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_MAG_FILTER, smooth ? GL10.GL_LINEAR : GL10.GL_NEAREST);
+			gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_WRAP_S, GL10.GL_CLAMP_TO_EDGE);
+			gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_WRAP_T, GL10.GL_CLAMP_TO_EDGE);
+			gl.glTexEnvf(GL10.GL_TEXTURE_ENV, GL10.GL_TEXTURE_ENV_MODE, GL10.GL_REPLACE);
 
-				textureId = mTextureNameWorkspace[0];
-				gl.glBindTexture(GL10.GL_TEXTURE_2D, textureId);
+			emuTextureInit = false;
+		}
 
-				smooth = isSmooth();
+		// Initialize texture if not yet done
+		if (!emuTextureInit) {
+			gl.glBindTexture(GL10.GL_TEXTURE_2D, emuTextureId);
+			int p2Width = getP2Size(gl, Emulator.getEmulatedWidth());
+			int p2Height = getP2Size(gl, Emulator.getEmulatedHeight());
+			ByteBuffer dummyBuffer = ByteBuffer.allocateDirect(p2Width * p2Height * 4);
+			dummyBuffer.order(ByteOrder.nativeOrder());
+			gl.glTexImage2D(GL10.GL_TEXTURE_2D, 0, GL10.GL_RGBA, p2Width, p2Height, 0, GL10.GL_RGBA, GL10.GL_UNSIGNED_BYTE, dummyBuffer);
+			emuTextureInit = true;
+		}
 
-				gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_MIN_FILTER,
-					smooth ? GL10.GL_LINEAR : GL10.GL_NEAREST);
-				gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_MAG_FILTER,
-					smooth ? GL10.GL_LINEAR : GL10.GL_NEAREST);
-
-				gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_WRAP_S, GL10.GL_CLAMP_TO_EDGE);
-				gl.glTexParameterf(GL10.GL_TEXTURE_2D, GL10.GL_TEXTURE_WRAP_T, GL10.GL_CLAMP_TO_EDGE);
-
-				gl.glTexEnvf(GL10.GL_TEXTURE_ENV, GL10.GL_TEXTURE_ENV_MODE, GL10.GL_REPLACE);
-
-				emuTextureId = textureId;
-				emuTextureInit = false;
-			}
-
-			if (!emuTextureInit) {
-				gl.glBindTexture(GL10.GL_TEXTURE_2D, emuTextureId);
-
-				ByteBuffer tmp = ByteBuffer.allocate(getP2Size(gl, Emulator.getEmulatedWidth()) * getP2Size(gl, Emulator.getEmulatedHeight()) * 4 /* RGB*/);
-				byte[] a = tmp.array();
-				Arrays.fill(a, (byte) 0);
-
-				gl.glTexImage2D(GL10.GL_TEXTURE_2D, 0, GL10.GL_RGBA,
-					getP2Size(gl, Emulator.getEmulatedWidth()),
-					getP2Size(gl, Emulator.getEmulatedHeight()),
-					0, GL10.GL_RGBA,
-					GL10.GL_UNSIGNED_BYTE, tmp);
-
-				emuTextureInit = true;
-			}
-
-			final int error = gl.glGetError();
-			if (error != GL10.GL_NO_ERROR) {
-				Log.e("GLRender", "createEmuTexture GLError: " + error);
-			}
+		final int error = gl.glGetError();
+		if (error != GL10.GL_NO_ERROR) {
+			Log.e("GLRender", "createEmuTexture GLError: " + error);
 		}
 	}
 
-	//long target = -1;
-
+	@Override
 	synchronized public void onDrawFrame(GL10 gl) {
-		// Log.v("mm","onDrawFrame called "+shortBuffer);
-		//gl.glClearColor(255, 255, 255, 1.0f);
 		gl.glClearColor(0, 0, 0, 1.0f);
 		gl.glClear(GL10.GL_COLOR_BUFFER_BIT | GL10.GL_DEPTH_BUFFER_BIT);
-
-        /*while(target != -1){
-        	if(System.nanoTime() > target)
-        		target = -1;
-        }
-        target = System.nanoTime() + 1000000000/60;*/
 
 		if (byteBuffer == null) {
 			ByteBuffer buf = Emulator.getScreenBuffer();
@@ -255,9 +240,10 @@ public class GLRendererES10 implements Renderer, IGLRenderer {
 		try {
 			createEmuTexture(gl);
 		} catch (OutOfMemoryError e) {
-			if (!warn)
+			if (!warn) {
 				new WarnWidget.WarnWidgetHelper(mm, "Not enough memory to create texture!", 5, Color.RED, true);
-			warn = true;
+				warn = true;
+			}
 			return;
 		}
 
@@ -266,17 +252,23 @@ public class GLRendererES10 implements Renderer, IGLRenderer {
 		int width = Emulator.getEmulatedWidth();
 		int height = Emulator.getEmulatedHeight();
 
-		gl.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, width, height,
-			GL10.GL_RGBA, GL10.GL_UNSIGNED_BYTE, byteBuffer);
+		// Update the texture with the latest emulated frame data
+		gl.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, width, height, GL10.GL_RGBA, GL10.GL_UNSIGNED_BYTE, byteBuffer);
 
-		mCrop[0] = 0; // u
-		mCrop[1] = height; // v
-		mCrop[2] = width; // w
-		mCrop[3] = -height; // h
+		// Define the cropping rectangle for the texture
+		mCrop[0] = 0;
+		mCrop[1] = height;
+		mCrop[2] = width;
+		mCrop[3] = -height;
 
 		((GL11) gl).glTexParameteriv(GL10.GL_TEXTURE_2D, GL11Ext.GL_TEXTURE_CROP_RECT_OES, mCrop, 0);
 
+		// Draw the cropped texture to the screen
 		((GL11Ext) gl).glDrawTexiOES(0, 0, 0, Emulator.getWindow_width(), Emulator.getWindow_height());
 
+		final int error = gl.glGetError();
+		if (error != GL10.GL_NO_ERROR) {
+			Log.e("GLRender", "onDrawFrame GLError: " + error);
+		}
 	}
 }

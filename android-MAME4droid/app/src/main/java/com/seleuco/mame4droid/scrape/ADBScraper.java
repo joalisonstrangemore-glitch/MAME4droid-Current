@@ -1,7 +1,7 @@
 /*
  * This file is part of MAME4droid.
  *
- * Copyright (C) 2023 David Valdeita (Seleuco)
+ * Copyright (C) 2025 David Valdeita (Seleuco)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -63,19 +63,29 @@ import java.nio.file.Paths;
 import java.util.Enumeration;
 import java.util.Properties;
 
+/**
+ * Implements the IScraper interface to download and save game media and data
+ * from the Arcade Database (ADB) at adb.arcadeitalia.net. This class handles
+ * HTTP requests, JSON parsing (via string manipulation), and file I/O to
+ * persist the scraped content.
+ */
 public class ADBScraper implements IScraper {
 
 	private static final String TAG = "SCRAPPER-ADB";
 
 	private static final int TIMEOUT = 5000;
 
+	// Constants for web service URLs, user agent, and property keys.
 	private static final String USER_AGENT = "MAME4droid/1.0";
 	private static final String ADB_STATUS_ADB_URL = "http://adb.arcadeitalia.net/service_scraper.php?ajax=download_status";
 	private static final String ADB_QUERY_MAME_URL = "http://adb.arcadeitalia.net/service_scraper.php?ajax=query_mame";
 	private static final String ADB_QUERY_FULL_URL = "http://adb.arcadeitalia.net/service_scraper.php?ajax=query_mame_media";
+
+	// File types
 	private static final String FILE_TYPE_PNG = "png";
 	private static final String FILE_TYPE_ICO = "ico";
 
+	// Property keys for different media types stored in the properties file.
 	private static final String PROPERTIE_INGAME = "ingame";
 	private static final String PROPERTIE_ICON = "icon";
 	private static final String PROPERTIE_FLYER = "flyer";
@@ -97,6 +107,7 @@ public class ADBScraper implements IScraper {
 	private static final String PROPERTIE_WARNING = "warning";
 	//private static final String PROPERTIE_BOX = "box";
 
+	// Directory names for storing downloaded media.
 	private static final String DIR_INGAME = "snap";
 	private static final String DIR_ICON = "icons";
 	private static final String DIR_CPANEL = "cpanel";
@@ -120,11 +131,18 @@ public class ADBScraper implements IScraper {
 	private static final String DIR_WARNING = "warning";
 
 	private static final String DIR_PROPERTIES = "scrape";
-	private String scrapeDir;
+
+	private final String scrapeDir;
 	private Boolean scraping = false;
 
 	private MAME4droid mm = null;
 
+	/**
+	 * Constructs the ADBScraper.
+	 *
+	 * @param dir The base directory where scraped files will be stored.
+	 * @param mm A reference to the MAME4droid application.
+	 */
 	public ADBScraper(String dir, MAME4droid mm){
 		scrapeDir = dir;
 		this.mm = mm;
@@ -135,8 +153,17 @@ public class ADBScraper implements IScraper {
 		this.mm = mm;
 	}
 
+	/**
+	 * Determines if a specific media type for a ROM needs to be downloaded.
+	 * It checks if the file exists in the properties file and if the user preferences
+	 * allow for the download of that media type.
+	 *
+	 * @param p The Properties object containing the status of downloaded files.
+	 * @param k The key representing the media type (e.g., "ingame", "icon").
+	 * @return true if the file needs to be downloaded, false otherwise.
+	 */
 	protected boolean needsDownload(Properties p, String k){
-
+		// Checks user preferences and download status in properties file.
 		if(PROPERTIE_ICON.equals(k) && !mm.getPrefsHelper().isScrapingIcons())
 			return false;
 		if(PROPERTIE_INGAME.equals(k) && !mm.getPrefsHelper().isScrapingSnapshots())
@@ -163,11 +190,13 @@ public class ADBScraper implements IScraper {
 
 			boolean skip = false;
 
+			// Check if a properties file already exists and if any media needs to be downloaded.
 			if (propsFile.exists()) {
 				FileInputStream in = new FileInputStream(propsFile);
 				props.load(in);
 				in.close();
 				skip = true;
+
 				if(skip) skip = !needsDownload(props, PROPERTIE_INGAME);
 				if(skip) skip = !needsDownload(props, PROPERTIE_ICON);
 				if(skip) skip = !needsDownload(props, PROPERTIE_CPANEL);
@@ -192,6 +221,7 @@ public class ADBScraper implements IScraper {
 				return false;
 			}
 
+			// Check ADB availability before starting the scrape process.
 			if(!scraping) {
 				String json_status = getJSON(ADB_STATUS_ADB_URL, TIMEOUT * 2);
 				if (json_status == null)
@@ -211,7 +241,7 @@ public class ADBScraper implements IScraper {
 			}
 
 			if (!isEmpty(json)) {
-
+				// Get image URLs from the JSON response and download them.
 				String url_icon = getImageURL("url_icon", json);
 				String url_image_ingame = getImageURL("url_image_ingame", json);
 
@@ -220,8 +250,8 @@ public class ADBScraper implements IScraper {
 				if (needsDownload(props, PROPERTIE_ICON))
 					props.put(PROPERTIE_ICON, download(rom_name, FILE_TYPE_ICO, url_icon, TIMEOUT, DIR_ICON) + "");
 
+				// Download additional media if the "scrape all" preference is enabled.
 				if(mm.getPrefsHelper().isScrapingAll()){
-
 					String url_image_cpanel = getImageURL("url_image_cpanel", json);
 					String url_image_cabinet = getImageURL("url_image_cabinet", json);
 					String url_image_marquee = getImageURL("url_image_marquee", json);
@@ -278,6 +308,7 @@ public class ADBScraper implements IScraper {
 				Log.d(TAG, "Not data: " + rom_name);
 			}
 
+			// Save the properties file.
 			FileOutputStream out = new FileOutputStream(propsFile);
 			props.store(out, null);
 			out.close();
@@ -291,18 +322,29 @@ public class ADBScraper implements IScraper {
 
 	@Override
 	public boolean reset() {
-/*
+
+		/*
 		Log.d(TAG, "Deleting properties...");
 		String propsDir = scrapeDir + DIR_PROPERTIES;
 		File f = new File(propsDir);
 		File[] contents = f.listFiles();
-		for (File f2 : contents) {
-			f2.delete();
+		if (contents != null) {
+			for (File f2 : contents) {
+				f2.delete();
+			}
 		}
- */
+		*/
 		return true;
 	}
 
+	/**
+	 * Extracts an image URL from a JSON string.
+	 * NOTE: This is a brittle method for parsing JSON.
+	 *
+	 * @param imageType The key for the image URL in the JSON.
+	 * @param json The JSON string to parse.
+	 * @return The extracted URL, or null if not found.
+	 */
 	protected String getImageURL(String imageType, String json) {
 		String url = null;
 		String token = "\"" + imageType + "\":";
@@ -317,6 +359,7 @@ public class ADBScraper implements IScraper {
 			return null;
 		url = url.replace("\\", "");
 
+		// Appends resize parameters based on user preferences.
 		if (url.endsWith("resize=0")) {
 			if (mm.getPrefsHelper().isScrapingResize())
 				url = url.replace("resize=0", "resize=300");
@@ -330,6 +373,12 @@ public class ADBScraper implements IScraper {
 		return url;
 	}
 
+	/**
+	 * Checks if the JSON response contains an empty result.
+	 *
+	 * @param json The JSON string to check.
+	 * @return true if the "result" field is an empty array, false otherwise.
+	 */
 	protected boolean isEmpty(String json) {
 		String data = null;
 		String token = "\"result\":";
@@ -343,6 +392,13 @@ public class ADBScraper implements IScraper {
 		return data.isEmpty();
 	}
 
+	/**
+	 * Makes an HTTP GET request to a specified URL and returns the JSON response.
+	 *
+	 * @param url The URL to connect to.
+	 * @param timeout The connection timeout in milliseconds.
+	 * @return The JSON response as a String, or null on error.
+	 */
 	protected String getJSON(String url, int timeout) {
 		HttpURLConnection c = null;
 		try {
@@ -366,7 +422,7 @@ public class ADBScraper implements IScraper {
 					StringBuilder sb = new StringBuilder();
 					String line;
 					while ((line = br.readLine()) != null) {
-						sb.append(line + "\n");
+						sb.append(line).append("\n");
 					}
 					br.close();
 					return sb.toString();
@@ -383,6 +439,16 @@ public class ADBScraper implements IScraper {
 		return null;
 	}
 
+	/**
+	 * Downloads a file from a URL and saves it to the specified directory.
+	 *
+	 * @param name The base name for the file.
+	 * @param fileType The file extension (e.g., "png", "ico").
+	 * @param url The URL of the file to download.
+	 * @param timeout The connection timeout.
+	 * @param folder The sub-directory to save the file in.
+	 * @return true if the download was successful, false otherwise.
+	 */
 	protected boolean download(String name, String fileType, String url, int timeout, String folder) {
 		String dir = scrapeDir + folder;
 		String fileName = name + "." + fileType;

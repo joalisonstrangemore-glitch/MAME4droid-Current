@@ -14,7 +14,7 @@ With over 40000 games and system supported, some games will run better than othe
 
 After installing, place your MAME-titled zipped ROMs in /storage/emulated/0/Android/data/com.seleuco.mame4d2024/files/roms folder (Read the help to see other possibilities for reading your ROMs). 
 
-This MAME4droid version uses only '0.280' romset. 
+This MAME4droid version uses only '0.281' romset. 
 
 FEATURES 
 ========

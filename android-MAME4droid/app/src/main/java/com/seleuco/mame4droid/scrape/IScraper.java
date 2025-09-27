@@ -1,7 +1,7 @@
 /*
  * This file is part of MAME4droid.
  *
- * Copyright (C) 2023 David Valdeita (Seleuco)
+ * Copyright (C) 2025 David Valdeita (Seleuco)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -46,11 +46,35 @@ package com.seleuco.mame4droid.scrape;
 
 import com.seleuco.mame4droid.MAME4droid;
 
+/**
+ * Defines the contract for a scraper component.
+ * Any class that implements this interface must provide methods
+ * for scraping data, resetting, and setting a reference to the main application.
+ */
 public interface IScraper {
 
+	/**
+	 * Scrapes data for a specific ROM.
+	 *
+	 * @param rom_name The name of the ROM to scrape data for.
+	 * @param current An integer representing the current state or progress (unused in current implementation, but part of the contract).
+	 * @return A boolean indicating the success of the scrape operation.
+	 * @throws ScrapeException if a critical error occurs during scraping.
+	 */
 	public boolean scrape(String rom_name, int current) throws ScrapeException;
 
+	/**
+	 * Resets the scraper's state or deletes previously scraped data.
+	 *
+	 * @return A boolean indicating whether the reset operation was successful.
+	 */
 	public boolean reset();
 
+	/**
+	 * Sets a reference to the main MAME4droid application instance.
+	 * This is typically used to access application-level data or preferences.
+	 *
+	 * @param mm The MAME4droid application instance.
+	 */
 	public void setMAME4droid(MAME4droid mm);
 }

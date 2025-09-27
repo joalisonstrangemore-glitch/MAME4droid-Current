@@ -818,7 +818,7 @@ public class Emulator {
 
 	static String[] safGetNextDirEntry(int dirId) {
 		//System.out.println("Llaman a safGetNextDirEntry en java "+dirId);
-		return mm.getSAFHelper().getNextDirEntrie(dirId);
+		return mm.getSAFHelper().getNextDirEntry(dirId);
 	}
 
 	static void safCloseDir(int dirId) {

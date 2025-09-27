@@ -156,12 +156,14 @@ public class InputHandler implements OnTouchListener, OnKeyListener {
 			return true;
 		}
 
+		/*
         if (ControlCustomizer.isEnabled()) {
             if (keyCode == KeyEvent.KEYCODE_BACK) {
                 mm.showDialog(DialogHelper.DIALOG_FINISH_CUSTOM_LAYOUT);
             }
             return true;
 		}
+        */
 
         if(gameController.handleGameController(keyCode,event,digital_data))
 		   return true;
