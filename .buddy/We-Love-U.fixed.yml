@@ -1,5 +1,0 @@
-- pipeline: we-love-u
-  name: We Love U
-  refs:
-  - :default
-  fail_on_prepare_env_warning: true
