@@ -1,15 +1,15 @@
 // license:BSD-3-Clause
-//============================================================
-//
-//  video.cpp -  osd video handling
-//
-//  MAME4DROID by David Valdeita (Seleuco)
-//
-//============================================================
+// copyright-holders:Aaron Giles
+/***************************************************************************
 
-// MAME headers
+    divideo.cpp
+
+    Device video interfaces.
+
+***************************************************************************/
+
 #include "emu.h"
-#include "render.h"
+#include "screen.h"
 #include "rendlay.h"
 #include "ui/uimain.h"
 #include "ui/ui.h"
@@ -19,146 +19,137 @@
 #include "drivenum.h"
 #include "rendersw.hxx"
 
-//MYOSD headers
-#include "myosd.h"
 
-#define MIN(a,b) ((a)<(b) ? (a) : (b))
-#define MAX(a,b) ((a)<(b) ? (b) : (a))
+const char device_video_interface::s_unconfigured_screen_tag[] = "!!UNCONFIGURED!!";
 
-// myosd_screen_ptr - needed 4 SW renderer
-uint8_t *myosd_screen_ptr;
-int myosd_fps;
-int myosd_zoom_to_window;
 
-//============================================================
-//  video_init
-//============================================================
 
-void my_osd_interface::video_init()
+//**************************************************************************
+//  DEVICE VIDEO INTERFACE
+//**************************************************************************
+
+//-------------------------------------------------
+//  device_video_interface - constructor
+//-------------------------------------------------
+
+device_video_interface::device_video_interface(const machine_config &mconfig, device_t &device, bool screen_required)
+	: device_interface(device, "video")
+	, m_screen_required(screen_required)
+	, m_screen_base(&device)
+	, m_screen_tag(s_unconfigured_screen_tag)
+	, m_screen(nullptr)
 {
-    osd_printf_verbose("my_osd_interface::video_init\n");
-
-    // create our *single* render target, we dont do multiple windows or monitors
-    m_target = machine().render().target_alloc();
-
-    m_video_none = strcmp(options().value(OPTION_VIDEO), "none") == 0;
-
-    m_min_width = 0;
-    m_min_height = 0;
-    m_vis_width = 0;
-    m_vis_height = 0;
-}
-
-//============================================================
-//  video_exit
-//============================================================
-
-void my_osd_interface::video_exit()
-{
-    osd_printf_verbose("my_osd_interface::video_exit\n");
-
-    // free the render target
-    machine().render().target_free(m_target);
-    m_target = nullptr;
-
-    if (m_callbacks.video_exit != nullptr)
-        m_callbacks.video_exit();
 }
 
 
-//============================================================
-//  update
-//============================================================
+//-------------------------------------------------
+//  ~device_video_interface - destructor
+//-------------------------------------------------
 
-void my_osd_interface::update(bool skip_redraw)
+device_video_interface::~device_video_interface()
 {
-    osd_printf_verbose("my_osd_interface::update\n");
-
-    if(m_callbacks.video_draw == nullptr)
-        return;
-
-    bool in_game = /*machine().phase() == machine_phase::RUNNING &&*/ &(machine().system()) != &GAME_NAME(___empty);
-    bool in_menu = /*machine().phase() == machine_phase::RUNNING &&*/ machine().ui().is_menu_active();
-    bool running = machine().phase() == machine_phase::RUNNING;
-    mame_machine_manager::instance()->ui().set_show_fps(myosd_fps);
-
-    // if skipping this redraw, bail
-    if (!skip_redraw && !m_video_none) {
-
-        int vis_width, vis_height;
-        int min_width, min_height;
-
-        //__android_log_print(ANDROID_LOG_DEBUG, "libMAME4droid.so", "video min_width:%d min_height:%d",min_width,min_height);
-
-        //target()->compute_visible_area(MAX(640,myosd_display_width), MAX(480,myosd_display_height), 1.0, target()->orientation(), vis_width, vis_height);
-
-        bool autores = myosd_display_width == 0 && myosd_display_height == 0;
-
-        if (in_game && (myosd_zoom_to_window || autores)) {
-
-            if (!autores) {
-
-                target()->compute_visible_area(myosd_display_width, myosd_display_height, 1.0,
-                                               target()->orientation(), vis_width, vis_height);
-
-                min_width = vis_width;
-                min_height = vis_height;
-            } else {
-
-                target()->compute_minimum_size( min_width, min_height);
-                if(min_width>640)min_width=640;
-                if(min_height>480)min_height=480;
-
-                target()->set_keepaspect(true);
-
-                target()->compute_visible_area(min_width, min_height, 1.0,
-                                               target()->orientation(), vis_width, vis_height);
-
-                target()->set_keepaspect(false);
-
-            }
-
-        } else {
-            if (in_game) {
-                min_width = vis_width = myosd_display_width;
-                min_height = vis_height = myosd_display_height;
-            } else {
-                min_width = vis_width = myosd_display_width_osd;
-                min_height = vis_height = myosd_display_height_osd;
-            }
-        }
-
-        // check for a change in the min-size of render target *or* size of the vis screen
-        if (min_width != m_min_width || min_height != m_min_height
-             || vis_width != m_vis_width || vis_height != m_vis_height) {
-
-            m_min_width = min_width;
-            m_min_height = min_height;
-            m_vis_width = vis_width;
-            m_vis_height = vis_height;
-
-            if (m_callbacks.video_init != nullptr) {
-                m_callbacks.video_init(min_width, min_height, vis_width, vis_height);
-            }
-        }
-
-        target()->set_bounds(min_width, min_height);
-
-        render_primitive_list *primlist = &target()->get_primitives();
-
-        int const pitch = min_width;
-
-        primlist->acquire_lock();
-        //bgr888
-        software_renderer<uint32_t, 0, 0, 0, 0, 8, 16>::draw_primitives(*primlist, myosd_screen_ptr,
-                                                                        min_width,
-                                                                        min_height,
-                                                                        pitch);
-
-        primlist->release_lock();
-    }
-
-    m_callbacks.video_draw(skip_redraw || m_video_none, in_game, in_menu, running);
 }
 
 
+void device_video_interface::set_screen(const char *tag)
+{
+	m_screen_base = &device().mconfig().current_device();
+	m_screen_tag = tag;
+}
+
+
+//-------------------------------------------------
+//  interface_config_complete - perform any
+//  operations now that the configuration is
+//  complete
+//-------------------------------------------------
+
+void device_video_interface::interface_config_complete()
+{
+	// find the screen if explicitly configured
+	if (m_screen_tag && strcmp(m_screen_tag, s_unconfigured_screen_tag) != 0)
+		m_screen = m_screen_base->subdevice<screen_device>(m_screen_tag);
+
+	// device_config_complete may now do whatever it needs to with the screen
+}
+
+
+//-------------------------------------------------
+//  interface_validity_check - validation for a
+//  device after the configuration has been
+//  constructed
+//-------------------------------------------------
+
+void device_video_interface::interface_validity_check(validity_checker &valid) const
+{
+	// only look up screens if we haven't explicitly requested no screen
+	screen_device *screen = nullptr;
+	if (m_screen_tag)
+	{
+		if (strcmp(m_screen_tag, s_unconfigured_screen_tag) != 0)
+		{
+			// find the screen device if explicitly configured
+			screen = m_screen_base->subdevice<screen_device>(m_screen_tag);
+			if (!screen)
+				osd_printf_error("Screen '%s' not found, explicitly set for device '%s'\n", m_screen_tag, device().tag());
+		}
+		else
+		{
+			// otherwise, look for a single match
+			screen_device_enumerator iter(device().mconfig().root_device());
+			screen = iter.first();
+			if (iter.count() > 1)
+				osd_printf_error("No screen specified for device '%s', but multiple screens found\n", device().tag());
+		}
+	}
+
+	// error if no screen is found
+	if (!screen && m_screen_required)
+		osd_printf_error("Device '%s' requires a screen\n", device().tag());
+}
+
+
+//-------------------------------------------------
+//  interface_pre_start - make sure all our input
+//  devices are started
+//-------------------------------------------------
+
+void device_video_interface::interface_pre_start()
+{
+	// only look up screens if we haven't explicitly requested no screen
+	if (m_screen_tag)
+	{
+		if (strcmp(m_screen_tag, s_unconfigured_screen_tag) != 0)
+		{
+			// find the screen device if explicitly configured
+			m_screen = m_screen_base->subdevice<screen_device>(m_screen_tag);
+			if (!m_screen)
+				throw emu_fatalerror("Screen '%s' not found, explicitly set for device '%s'", m_screen_tag, device().tag());
+		}
+		else
+		{
+			// otherwise, look for a single match
+			screen_device_enumerator iter(device().machine().root_device());
+			m_screen = iter.first();
+			if (iter.count() > 1)
+				throw emu_fatalerror("No screen specified for device '%s', but multiple screens found", device().tag());
+		}
+	}
+
+	// fatal error if no screen is found
+	if (!m_screen && m_screen_required)
+		throw emu_fatalerror("Device '%s' requires a screen", device().tag());
+
+	// if we have a screen and it's not started, wait for it
+	if (m_screen && !m_screen->started())
+	{
+		// avoid circular dependency if we are also a palette device
+		device_palette_interface *palintf;
+		if (!device().interface(palintf))
+			throw device_missing_dependencies();
+
+		// no other palette may be specified
+		if (m_screen->has_palette() && palintf != &m_screen->palette())
+			throw emu_fatalerror("Device '%s' cannot control screen '%s' with palette '%s'", device().tag(), m_screen_tag, m_screen->palette().device().tag());
+	}
+}
